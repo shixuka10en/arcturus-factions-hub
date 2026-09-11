@@ -8,7 +8,6 @@ import {
   Flame,
   Gem,
   Globe2,
-  MailWarning,
   Server,
   ShieldOff,
   Sparkles,
