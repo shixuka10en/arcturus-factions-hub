@@ -48,15 +48,7 @@ export const Route = createFileRoute("/")({
   component: ArcturusPage,
 });
 
-function Reveal({
-  children,
-  className,
-  direction = "up",
-}: {
-  children: ReactNode;
-  className?: string;
-  direction?: "up" | "left" | "right" | "scale";
-}) {
+function Reveal({ children, className }: { children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -69,14 +61,14 @@ function Reveal({
           observer.unobserve(element);
         }
       },
-      { threshold: 0.12, rootMargin: "0px 0px -8% 0px" },
+      { threshold: 0.14 },
     );
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
   return (
-    <div ref={ref} className={cn("reveal", `reveal-${direction}`, className)}>
+    <div ref={ref} className={cn("reveal", className)}>
       {children}
     </div>
   );
@@ -185,11 +177,11 @@ function ArcturusPage() {
 
       <section id="about" className="grid-texture border-b border-border py-24 sm:py-32">
         <div className="mx-auto grid max-w-7xl items-center gap-14 px-5 sm:px-8 lg:grid-cols-[.8fr_1.2fr]">
-          <Reveal direction="left">
+          <Reveal>
             <p className="mb-4 text-sm font-bold uppercase text-primary">Introducing Arcturus</p>
             <h2 className="font-display text-4xl uppercase leading-tight sm:text-6xl">Freedom is the <span className="text-accent">whole point.</span></h2>
           </Reveal>
-          <Reveal direction="right" className="lg:border-l lg:border-border lg:pl-14">
+          <Reveal className="lg:border-l lg:border-border lg:pl-14">
             <p className="text-xl leading-relaxed text-foreground/80 sm:text-2xl">
               Arcturus is a Minecraft Factions server focused on <strong className="text-foreground">no-staff mechanics.</strong> If staff control what you can and can’t do, what’s the point of playing in that dystopian environment?
             </p>
@@ -211,7 +203,7 @@ function ArcturusPage() {
             </div>
             <p className="max-w-md text-muted-foreground">Explore, raid, trade, and grind your way to the top. Your faction’s story is decided by players—not a staff panel.</p>
           </Reveal>
-          <div className="reveal-stagger grid border-l border-t border-border sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid border-l border-t border-border sm:grid-cols-2 lg:grid-cols-3">
             {features.map(({ icon: Icon, title, text }, index) => (
               <Reveal key={title} className="h-full" >
                 <article className="group h-full min-h-64 border-b border-r border-border bg-card/40 p-7 transition-colors hover:bg-card sm:p-9">
@@ -235,19 +227,19 @@ function ArcturusPage() {
             <h2 className="font-display text-4xl uppercase sm:text-6xl">A world worth fighting for.</h2>
           </Reveal>
           <div className="grid gap-4 md:grid-cols-12 md:grid-rows-2">
-            <Reveal direction="left" className="md:col-span-7 md:row-span-2">
+            <Reveal className="md:col-span-7 md:row-span-2">
               <figure className="group relative h-full min-h-[420px] overflow-hidden border border-border md:min-h-[700px]">
                 <img src={factionsAsset.url} alt="Arcturus Factions village at sunset" loading="lazy" className="size-full object-cover transition-transform duration-700 group-hover:scale-[1.025]" />
                 <figcaption className="absolute inset-x-0 bottom-0 bg-background/85 p-5 backdrop-blur-md"><span className="font-display uppercase">Faction heartlands</span><span className="ml-3 text-sm text-muted-foreground">Explore · Raid · Grind</span></figcaption>
               </figure>
             </Reveal>
-            <Reveal direction="right" className="md:col-span-5">
+            <Reveal className="md:col-span-5">
               <figure className="group relative h-full min-h-72 overflow-hidden border border-border">
                 <img src={marketAsset.url} alt="Arcturus custom chest marketplace" loading="lazy" className="size-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
                 <figcaption className="absolute inset-x-0 bottom-0 bg-background/85 p-4 font-display uppercase backdrop-blur-md">Custom rewards</figcaption>
               </figure>
             </Reveal>
-            <Reveal direction="right" className="md:col-span-5">
+            <Reveal className="md:col-span-5">
               <figure className="group relative h-full min-h-72 overflow-hidden border border-border">
                 <img src={wildsAsset.url} alt="Arcturus wilderness lake at sunset" loading="lazy" className="size-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
                 <figcaption className="absolute inset-x-0 bottom-0 bg-background/85 p-4 font-display uppercase backdrop-blur-md">The wild frontier</figcaption>
@@ -263,7 +255,7 @@ function ArcturusPage() {
             <p className="mb-4 text-sm font-bold uppercase text-primary">Choose your server</p>
             <h2 className="font-display text-4xl uppercase sm:text-6xl">Stay controlled—or <span className="text-primary">be free.</span></h2>
           </Reveal>
-          <Reveal direction="scale">
+          <Reveal>
             <div className="overflow-hidden border border-border bg-card">
               <div className="grid grid-cols-2 border-b border-border">
                 <div className="bg-muted p-5 sm:p-7"><p className="font-display text-sm uppercase text-muted-foreground sm:text-xl">The old way</p></div>
