@@ -74,7 +74,13 @@ function Reveal({ children, className }: { children: ReactNode; className?: stri
   );
 }
 
-function CopyIpButton({ variant = "default" }: { variant?: "default" | "outline" }) {
+function CopyIpButton({
+  variant = "default",
+  compact = false,
+}: {
+  variant?: "default" | "outline";
+  compact?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function copyIp() {
@@ -84,9 +90,17 @@ function CopyIpButton({ variant = "default" }: { variant?: "default" | "outline"
   }
 
   return (
-    <Button variant={variant} size="lg" onClick={copyIp} aria-label="Copy server IP">
+    <Button
+      variant={variant}
+      size="lg"
+      onClick={copyIp}
+      aria-label="Copy server IP"
+      className={compact ? "w-12 px-0 sm:w-auto sm:px-7" : undefined}
+    >
       {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-      {copied ? "IP Copied" : SERVER_IP}
+      <span className={compact ? "hidden sm:inline" : undefined}>
+        {copied ? "IP Copied" : SERVER_IP}
+      </span>
     </Button>
   );
 }
@@ -127,7 +141,7 @@ function ArcturusPage() {
             <a className="transition-colors hover:text-primary" href="#gallery">World</a>
             <a className="transition-colors hover:text-primary" href="#compare">Compare</a>
           </nav>
-          <CopyIpButton variant="outline" />
+          <CopyIpButton variant="outline" compact />
         </div>
       </header>
 
