@@ -77,8 +77,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
+      { title: "Arcturus Reborn" },
+      { name: "description", content: "No-staff Minecraft Factions. Freedom forever." },
       { name: "author", content: "Arcturus Reborn" },
       { property: "og:title", content: "Arcturus Reborn" },
       { property: "og:description", content: "No staff. No limits. Freedom forever." },
