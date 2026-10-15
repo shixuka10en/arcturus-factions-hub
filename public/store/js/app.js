@@ -2,13 +2,11 @@
   const CONFIG = {
     publicToken: "ti29-45ff1ef831c85c765f3d033de1ffa13f7c6c462b",
     apiRoot: "https://headless.tebex.io/api",
-    website: "https://www.arcturusmc.org",
     server: "play.arcturusmc.org",
     discord: "https://discord.gg/DTR6serkeM",
     discordId: "1127553089533120562",
-    completePath: "/store/?checkout=complete",
-    cancelPath: "/store/",
     storageKey: "arcturus.tebex.basket",
+    featuredPackageId: 7692691, // Slayer Set
   };
 
   const accountApi = `${CONFIG.apiRoot}/accounts/${CONFIG.publicToken}`;
@@ -21,6 +19,7 @@
     pendingPackageId: null,
     view: "home",
     categoryId: null,
+    modalGallery: null, // { images: [], index: 0, pkgId: null }
   };
 
   const els = {};
@@ -34,11 +33,6 @@
     return `${amount.toFixed(2)} ${currency}`;
   }
 
-  function truncate(text, length) {
-    const value = String(text || "");
-    return value.length > length ? `${value.slice(0, length)}` : value;
-  }
-
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -47,12 +41,28 @@
       .replaceAll('"', "&quot;");
   }
 
+  function sanitizeContent(html) {
+    if (!html) return "";
+    return String(html)
+      .replace(/https?:\/\/arcturusmc\.xyz\/discord/gi, CONFIG.discord)
+      .replace(/arcturusmc\.xyz/gi, "arcturusmc.org")
+      .replace(
+        /Gold is the premium currency on Arcturus for upgrading yourself and getting special items\.(\s*<br\s*\/?>\s*|\s*)(You can buy (?:ranks and pinatas|tiers, pinatas, and chest keys) with gold\.)?/gi,
+        "Gold is the premium currency on Arcturus for getting tiers, pinatas, and chest keys.",
+      )
+      .replace(
+        /You can buy (?:ranks and pinatas|tiers, pinatas, and chest keys) with gold\./gi,
+        "You can buy tiers, pinatas, and chest keys with gold.",
+      )
+      .replace(/open a crate at spawn!/gi, "open a crate at spawn.");
+  }
+
   function completeUrl() {
-    return `${window.location.origin}${CONFIG.completePath}`;
+    return `${window.location.origin}${window.location.pathname}?checkout=complete`;
   }
 
   function cancelUrl() {
-    return `${window.location.origin}${CONFIG.cancelPath}`;
+    return `${window.location.origin}${window.location.pathname}`;
   }
 
   async function api(url, options = {}) {
@@ -90,13 +100,14 @@
 
   function showAlert(message, type = "success") {
     const box = els.alert;
-    if (!box) return;
-    box.className = `alert alert--${type} is-visible`;
-    box.innerHTML = `<span>${escapeHtml(message)}</span>`;
+    const text = els.alertText;
+    if (!box || !text) return;
+    box.className = `site-alert site-alert--${type} is-visible`;
+    text.textContent = message;
     window.clearTimeout(showAlert.timer);
     showAlert.timer = window.setTimeout(() => {
       box.classList.remove("is-visible");
-    }, 5000);
+    }, 4500);
   }
 
   function setBusy(busy) {
@@ -125,715 +136,1000 @@
       url.searchParams.set("category", String(next.categoryId));
     }
     if (next.view === "complete") url.searchParams.set("checkout", "complete");
+
     if (replace) {
-      history.replaceState(next, "", url);
+      window.history.replaceState({}, "", url.toString());
     } else {
-      history.pushState(next, "", url);
+      window.history.pushState({}, "", url.toString());
     }
     state.view = next.view;
     state.categoryId = next.categoryId || null;
     render();
   }
 
-  function basketPackages() {
-    return state.basket?.packages || [];
-  }
+  async function loadCatalog() {
+    const [storeRes, catRes, pkgRes] = await Promise.all([
+      api(accountApi),
+      api(`${accountApi}/categories?includePackages=1`),
+      api(`${accountApi}/packages`),
+    ]);
 
-  function basketCount() {
-    return basketPackages().reduce(
-      (sum, item) => sum + Number(item.in_basket?.quantity || item.quantity || 1),
-      0,
-    );
-  }
+    state.store = storeRes?.data || null;
 
-  function packageInBasket(packageId) {
-    return basketPackages().find((item) => Number(item.id) === Number(packageId));
-  }
+    const packages = Array.isArray(pkgRes?.data) ? pkgRes.data : [];
+    state.packagesById.clear();
+    packages.forEach((pkg) => {
+      state.packagesById.set(Number(pkg.id), pkg);
+    });
 
-  function packageQuantity(packageId) {
-    const found = packageInBasket(packageId);
-    return Number(found?.in_basket?.quantity || found?.quantity || 0);
-  }
-
-  function manageMenu(action, name) {
-    const target = [...document.querySelectorAll(".menuWrapper")].find(
-      (node) => node.dataset.toggle === name,
-    );
-    if (!target) return;
-    if (action === "open") target.classList.add("menuWrapper--open");
-    else target.classList.remove("menuWrapper--open");
-  }
-
-  function toggleDropdown(name) {
-    const target = [...document.querySelectorAll(".dropdownMenu")].find(
-      (node) => node.dataset.toggle === name,
-    );
-    if (target) target.classList.toggle("dropdownMenu--open");
-  }
-
-  function bindCursorAura() {
-    document.querySelectorAll(".cursorAura").forEach((button) => {
-      button.addEventListener("mousemove", (event) => {
-        const { x, y } = button.getBoundingClientRect();
-        button.style.setProperty("--x", event.clientX - x);
-        button.style.setProperty("--y", event.clientY - y);
+    const rawCats = Array.isArray(catRes?.data) ? catRes.data : [];
+    state.categories = rawCats.map((cat) => {
+      const catPackages = (cat.packages || []).map((p) => {
+        const full = state.packagesById.get(Number(p.id));
+        return full || p;
       });
+      return {
+        ...cat,
+        packages: catPackages,
+      };
     });
   }
 
-  function popupDisplay(show) {
-    els.popup.style.display = show ? "block" : "none";
-    els.popupBack.style.display = show ? "block" : "none";
+  function getStoredBasketIdent() {
+    return localStorage.getItem(CONFIG.storageKey) || null;
   }
 
-  function fallbackCopy(text) {
-    const field = document.createElement("textarea");
-    field.value = text;
-    field.style.position = "fixed";
-    field.style.top = "0";
-    field.style.left = "0";
-    document.body.appendChild(field);
-    field.focus();
-    field.select();
-    document.execCommand("copy");
-    document.body.removeChild(field);
-  }
-
-  function copyText(text) {
-    if (!navigator.clipboard) {
-      fallbackCopy(text);
-      return;
-    }
-    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
-  }
-
-  async function loadCatalog() {
-    const [storeRes, catalogRes] = await Promise.all([
-      api(accountApi),
-      api(`${accountApi}/categories?includePackages=1`),
-    ]);
-    state.store = storeRes.data || storeRes;
-    state.categories = (catalogRes.data || [])
-      .slice()
-      .sort((a, b) => (a.order || 0) - (b.order || 0));
-    state.packagesById.clear();
-    for (const category of state.categories) {
-      for (const pkg of category.packages || []) {
-        state.packagesById.set(Number(pkg.id), { ...pkg, category });
-      }
+  function storeBasketIdent(ident) {
+    if (ident) {
+      localStorage.setItem(CONFIG.storageKey, ident);
+    } else {
+      localStorage.removeItem(CONFIG.storageKey);
     }
   }
 
-  async function loadBasket(ident = localStorage.getItem(CONFIG.storageKey)) {
+  async function loadBasket() {
+    const ident = getStoredBasketIdent();
     if (!ident) {
       state.basket = null;
       return;
     }
     try {
-      let payload;
-      try {
-        payload = await api(`${accountApi}/baskets/${ident}`);
-      } catch (error) {
-        if (error.status !== 404) throw error;
-        payload = await api(`${CONFIG.apiRoot}/baskets/${ident}`);
+      const res = await api(`${CONFIG.apiRoot}/baskets/${ident}`);
+      const basket = res?.data || null;
+      if (basket && basket.username) {
+        state.basket = basket;
+      } else {
+        // Discard baskets without an authenticated player username
+        storeBasketIdent(null);
+        state.basket = null;
       }
-      state.basket = payload.data || payload;
-      if (state.basket?.ident) localStorage.setItem(CONFIG.storageKey, state.basket.ident);
-    } catch {
-      localStorage.removeItem(CONFIG.storageKey);
+    } catch (err) {
+      console.warn("Stored basket invalid, discarding:", err.message);
+      storeBasketIdent(null);
       state.basket = null;
     }
   }
 
-  async function createBasket(username) {
-    const payload = await api(`${accountApi}/baskets`, {
+  async function ensureBasketWithAuth(username) {
+    const targetUser = (username || state.basket?.username || "").trim();
+    if (!targetUser) {
+      throw new Error("Minecraft username is required.");
+    }
+
+    // Reuse active basket if it belongs to the same Minecraft user
+    if (state.basket?.ident && state.basket?.username?.toLowerCase() === targetUser.toLowerCase()) {
+      return state.basket.ident;
+    }
+
+    // Create a new basket session for this Minecraft username
+    const created = await api(`${accountApi}/baskets`, {
       method: "POST",
       body: JSON.stringify({
-        username,
+        username: targetUser,
         complete_url: completeUrl(),
         cancel_url: cancelUrl(),
-        complete_auto_redirect: true,
       }),
     });
-    state.basket = payload.data || payload;
-    if (!state.basket?.ident) throw new Error("Tebex did not return a basket.");
-    localStorage.setItem(CONFIG.storageKey, state.basket.ident);
-    return state.basket;
+
+    const basket = created?.data;
+    if (!basket?.ident) {
+      throw new Error("Failed to create Tebex basket session.");
+    }
+
+    state.basket = basket;
+    storeBasketIdent(basket.ident);
+    return basket.ident;
   }
 
-  async function refreshBasket() {
-    if (!state.basket?.ident) return;
-    await loadBasket(state.basket.ident);
+  function basketPackages() {
+    return state.basket?.packages || [];
   }
 
-  async function addPackage(packageId, extra = {}) {
-    if (!state.basket?.ident) {
-      state.pendingPackageId = packageId;
+  function packageInBasket(pkgId) {
+    const numeric = Number(pkgId);
+    return basketPackages().find((p) => Number(p.id) === numeric);
+  }
+
+  function packageQuantity(pkgId) {
+    const item = packageInBasket(pkgId);
+    return item ? Number(item.in_basket?.quantity || item.quantity || 1) : 0;
+  }
+
+  function basketCount() {
+    return basketPackages().reduce((sum, item) => {
+      return sum + Number(item.in_basket?.quantity || item.quantity || 1);
+    }, 0);
+  }
+
+  async function addPackage(pkgId, quantity = 1) {
+    const pkg = state.packagesById.get(Number(pkgId));
+    if (!pkg) throw new Error("Package not found in catalog");
+
+    const currentUsername = state.basket?.username;
+    if (!currentUsername) {
+      state.pendingPackageId = Number(pkgId);
       setRoute({ view: "login" });
+      showAlert("Please enter your Minecraft username first to add packages.", "danger");
       return;
     }
+
     setBusy(true);
     try {
-      const payload = await api(`${CONFIG.apiRoot}/baskets/${state.basket.ident}/packages`, {
+      const ident = await ensureBasketWithAuth(currentUsername);
+      const res = await api(`${CONFIG.apiRoot}/baskets/${ident}/packages`, {
         method: "POST",
         body: JSON.stringify({
-          package_id: Number(packageId),
-          quantity: extra.quantity || 1,
-          ...(extra.gift_username ? { gift_username: extra.gift_username } : {}),
+          package_id: Number(pkgId),
+          quantity: Number(quantity),
         }),
       });
-      state.basket = payload.data || payload;
-      if (!state.basket?.packages) await refreshBasket();
-      showAlert("Added to cart.");
+      state.basket = res?.data || state.basket;
+      showAlert(`Added "${pkg.name}" to cart!`);
       render();
-      manageMenu("open", "basket");
-    } catch (error) {
-      showAlert(error.message, "danger");
+      openCartDrawer();
     } finally {
       setBusy(false);
     }
   }
 
-  async function removePackage(packageId) {
-    if (!state.basket?.ident) return;
+  async function updatePackageQuantity(pkgId, newQty) {
+    const numericId = Number(pkgId);
+    if (newQty <= 0) {
+      return removePackage(numericId);
+    }
     setBusy(true);
     try {
-      let payload;
-      try {
-        payload = await api(`${CONFIG.apiRoot}/baskets/${state.basket.ident}/packages/remove`, {
-          method: "POST",
-          body: JSON.stringify({ package_id: Number(packageId) }),
-        });
-      } catch {
-        payload = await api(`${accountApi}/baskets/${state.basket.ident}/packages/remove`, {
-          method: "POST",
-          body: JSON.stringify({ package_id: Number(packageId) }),
-        });
-      }
-      state.basket = payload.data || payload;
-      if (!state.basket?.packages) await refreshBasket();
+      const ident = state.basket?.ident || getStoredBasketIdent();
+      if (!ident) return;
+      const res = await api(`${CONFIG.apiRoot}/baskets/${ident}/packages/${numericId}`, {
+        method: "PUT",
+        body: JSON.stringify({ quantity: Number(newQty) }),
+      });
+      state.basket = res?.data || state.basket;
       render();
-    } catch (error) {
-      showAlert(error.message, "danger");
     } finally {
       setBusy(false);
     }
   }
 
-  async function setQuantity(packageId, quantity) {
-    if (quantity < 1) {
-      await removePackage(packageId);
-      return;
-    }
-    if (!state.basket?.ident) return;
+  async function removePackage(pkgId) {
+    const numericId = Number(pkgId);
     setBusy(true);
     try {
-      let payload;
-      try {
-        payload = await api(
-          `${CONFIG.apiRoot}/baskets/${state.basket.ident}/packages/${packageId}`,
-          {
-            method: "PUT",
-            body: JSON.stringify({ quantity }),
-          },
-        );
-      } catch {
-        payload = await api(`${CONFIG.apiRoot}/baskets/${state.basket.ident}/packages`, {
-          method: "POST",
-          body: JSON.stringify({ package_id: Number(packageId), quantity }),
-        });
-      }
-      state.basket = payload.data || payload;
-      if (!state.basket?.packages) await refreshBasket();
+      const ident = state.basket?.ident || getStoredBasketIdent();
+      if (!ident) return;
+      const res = await api(`${CONFIG.apiRoot}/baskets/${ident}/packages/remove`, {
+        method: "POST",
+        body: JSON.stringify({ package_id: numericId }),
+      });
+      state.basket = res?.data || state.basket;
+      showAlert("Package removed from cart");
       render();
-    } catch (error) {
-      showAlert(error.message, "danger");
     } finally {
       setBusy(false);
     }
   }
 
-  function checkout() {
-    const url = state.basket?.links?.checkout;
-    if (!url) {
-      showAlert("Add an item before checking out.", "danger");
+  async function giftPackage(pkgId, friendUsername) {
+    if (!friendUsername) throw new Error("Friend's username required");
+    const currentUsername = state.basket?.username;
+    if (!currentUsername) {
+      state.pendingPackageId = Number(pkgId);
+      setRoute({ view: "login" });
+      showAlert("Please enter your Minecraft username first before gifting.", "danger");
       return;
     }
-    window.location.href = url;
+
+    setBusy(true);
+    try {
+      const ident = await ensureBasketWithAuth(currentUsername);
+      const res = await api(`${CONFIG.apiRoot}/baskets/${ident}/packages`, {
+        method: "POST",
+        body: JSON.stringify({
+          package_id: Number(pkgId),
+          gift_username: friendUsername.trim(),
+        }),
+      });
+      state.basket = res?.data || state.basket;
+      showAlert(`Gift package for "${friendUsername}" added to cart!`);
+      closeModal();
+      render();
+      openCartDrawer();
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function logout() {
-    localStorage.removeItem(CONFIG.storageKey);
-    state.basket = null;
-    manageMenu("close", "basket");
-    render();
-    showAlert("Logged out of the store.");
+  function openCartDrawer() {
+    els.cartDrawer.classList.add("is-open");
+    els.cartDrawerOverlay.classList.add("is-open");
   }
 
-  function openPackageModal(packageId) {
-    const pkg = state.packagesById.get(Number(packageId));
+  function closeCartDrawer() {
+    els.cartDrawer.classList.remove("is-open");
+    els.cartDrawerOverlay.classList.remove("is-open");
+  }
+
+  function getPackageImages(pkg) {
+    if (!pkg) return [];
+    const images = [];
+    const seen = new Set();
+
+    // 1. Media items from Tebex API (sort primary first)
+    if (Array.isArray(pkg.media) && pkg.media.length > 0) {
+      const sortedMedia = [...pkg.media].sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0));
+      for (const m of sortedMedia) {
+        const url = typeof m === "string" ? m : m?.url;
+        if (url && !seen.has(url)) {
+          seen.add(url);
+          images.push(url);
+        }
+      }
+    }
+
+    // 2. Primary image field if not yet present
+    if (pkg.image && !seen.has(pkg.image)) {
+      images.unshift(pkg.image);
+      seen.add(pkg.image);
+    }
+
+    // 3. Fallback for potential images array
+    if (Array.isArray(pkg.images)) {
+      for (const url of pkg.images) {
+        if (url && !seen.has(url)) {
+          seen.add(url);
+          images.push(url);
+        }
+      }
+    }
+
+    return images;
+  }
+
+  function setModalGalleryIndex(newIndex) {
+    if (!state.modalGallery || !state.modalGallery.images.length) return;
+    const count = state.modalGallery.images.length;
+    const nextIdx = ((newIndex % count) + count) % count;
+    state.modalGallery.index = nextIdx;
+
+    const track = $("#modalGalleryTrack");
+    if (track) {
+      const slides = track.querySelectorAll(".modal-gallery-slide");
+      slides.forEach((slide, idx) => {
+        const isActive = idx === nextIdx;
+        slide.classList.toggle("active", isActive);
+        slide.setAttribute("aria-hidden", String(!isActive));
+      });
+    }
+
+    const currentSpan = $(".gallery-counter-current");
+    if (currentSpan) {
+      currentSpan.textContent = String(nextIdx + 1);
+    }
+
+    const thumbsContainer = $(".modal-gallery-thumbs");
+    if (thumbsContainer) {
+      const thumbs = thumbsContainer.querySelectorAll(".modal-thumb-btn");
+      thumbs.forEach((thumb, idx) => {
+        const isActive = idx === nextIdx;
+        thumb.classList.toggle("active", isActive);
+        thumb.setAttribute("aria-selected", String(isActive));
+        if (isActive) {
+          thumb.scrollIntoView({ behavior: "smooth", inline: "nearest", block: "nearest" });
+        }
+      });
+    }
+  }
+
+  let touchStartX = 0;
+  let touchStartY = 0;
+  function initModalTouchEvents() {
+    const viewport = $("#modalGalleryViewport");
+    if (!viewport) return;
+
+    viewport.addEventListener(
+      "touchstart",
+      (e) => {
+        touchStartX = e.changedTouches[0].screenX;
+        touchStartY = e.changedTouches[0].screenY;
+      },
+      { passive: true },
+    );
+
+    viewport.addEventListener(
+      "touchend",
+      (e) => {
+        const diffX = e.changedTouches[0].screenX - touchStartX;
+        const diffY = e.changedTouches[0].screenY - touchStartY;
+        if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY)) {
+          if (diffX < 0) {
+            if (state.modalGallery) setModalGalleryIndex(state.modalGallery.index + 1);
+          } else {
+            if (state.modalGallery) setModalGalleryIndex(state.modalGallery.index - 1);
+          }
+        }
+      },
+      { passive: true },
+    );
+  }
+
+  function openPackageModal(pkgId) {
+    const pkg = state.packagesById.get(Number(pkgId));
     if (!pkg) return;
+
+    const container = els.modalContainer;
+    const sanitizedDesc = sanitizeContent(pkg.description);
     const inBasket = Boolean(packageInBasket(pkg.id));
-    els.modal.innerHTML = `
-      <div class="modalWrapper">
-        <div class="modal__header">
-          <h2>${escapeHtml(pkg.name)}</h2>
-          <button type="button" class="iconBoxed iconBoxed--rounded btn--dark cursorAura cursorAura--dim" data-close-modal>
-            <i class="fas fa-times"></i>
-          </button>
+    const images = getPackageImages(pkg);
+    const hasMultipleImages = images.length > 1;
+
+    state.modalGallery = {
+      images,
+      index: 0,
+      pkgId: pkg.id,
+    };
+
+    let galleryHtml = "";
+    if (images.length > 0) {
+      const slidesHtml = images
+        .map(
+          (imgUrl, idx) => `
+        <div class="modal-gallery-slide ${idx === 0 ? "active" : ""}" role="group" aria-roledescription="slide" aria-label="Image ${idx + 1} of ${images.length}" aria-hidden="${idx === 0 ? "false" : "true"}">
+          <img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(pkg.name)} - Preview ${idx + 1}" loading="${idx === 0 ? "eager" : "lazy"}" draggable="false" />
         </div>
-        ${pkg.description ? `<div class="modal__body markup__body">${pkg.description}</div>` : ""}
-        <div class="modal__footer">
-          <div class="modal__price">
-            <h3>${money(pkg.total_price ?? pkg.base_price, pkg.currency || state.store?.currency)}</h3>
-            <div class="modal__buttons">
-              ${
-                pkg.disable_gifting
-                  ? ""
-                  : `<button class="btn btn--dark btn--gift cursorAura cursorAura--dim" data-collapse="gift">Gift<i class="fas fa-chevron-down"></i></button>`
-              }
-              ${
-                inBasket
-                  ? `<button class="btn btn--danger cursorAura" data-remove="${pkg.id}">Remove</button>`
-                  : `<button class="btn btn--primary cursorAura" data-add="${pkg.id}">Purchase</button>`
-              }
+      `,
+        )
+        .join("");
+
+      const thumbsHtml = hasMultipleImages
+        ? `
+        <div class="modal-gallery-thumbs" role="tablist" aria-label="Preview image thumbnails">
+          ${images
+            .map(
+              (imgUrl, idx) => `
+            <button type="button" role="tab" class="modal-thumb-btn ${idx === 0 ? "active" : ""}" aria-selected="${idx === 0 ? "true" : "false"}" aria-label="View image ${idx + 1}" data-gallery-jump="${idx}">
+              <img src="${escapeHtml(imgUrl)}" alt="" loading="lazy" />
+            </button>
+          `,
+            )
+            .join("")}
+        </div>
+      `
+        : "";
+
+      const navControlsHtml = hasMultipleImages
+        ? `
+        <button type="button" class="modal-gallery-btn modal-gallery-prev" data-gallery-prev aria-label="Previous image">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <button type="button" class="modal-gallery-btn modal-gallery-next" data-gallery-next aria-label="Next image">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="modal-gallery-counter" aria-live="polite">
+          <span class="gallery-counter-current">1</span> / <span class="gallery-counter-total">${images.length}</span>
+        </div>
+      `
+        : "";
+
+      galleryHtml = `
+        <div class="modal-gallery" role="region" aria-roledescription="carousel" aria-label="${escapeHtml(pkg.name)} preview images">
+          <div class="modal-gallery-viewport" id="modalGalleryViewport">
+            <div class="modal-gallery-track" id="modalGalleryTrack">
+              ${slidesHtml}
+            </div>
+            ${navControlsHtml}
+          </div>
+          ${thumbsHtml}
+        </div>
+      `;
+    } else {
+      galleryHtml = `
+        <div class="modal-gallery modal-gallery--empty">
+          <div class="modal-gallery-viewport modal-gallery-viewport--placeholder">
+            <div class="package-placeholder-icon" style="width: 5rem; height: 5rem; font-size: 2rem;">
+              <i class="fas fa-box-open"></i>
             </div>
           </div>
-          ${
-            pkg.disable_gifting
-              ? ""
-              : `<div class="modal__gift collapsible" data-collapsible="gift">
-                  <form data-gift-form="${pkg.id}">
-                    <input type="text" name="username" placeholder="Enter a username to gift this package to" required />
-                    <button type="submit" class="btn btn--accent cursorAura"><i class="fas fa-gift"></i>Gift</button>
-                  </form>
-                </div>`
-          }
         </div>
+      `;
+    }
+
+    container.innerHTML = `
+      <div class="hud-modal-header">
+        <h2>${escapeHtml(pkg.name)}</h2>
+        <button type="button" class="cart-drawer-close" data-close-modal aria-label="Close modal">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="hud-modal-body">
+        ${galleryHtml}
+        ${sanitizedDesc ? `<div class="modal-desc-content" style="margin-bottom: 1.25rem;">${sanitizedDesc}</div>` : "<p class='text-muted'>No description provided for this package.</p>"}
+        ${
+          pkg.disable_gifting
+            ? ""
+            : `<div class="modal-gift-section">
+                <button type="button" class="modal-gift-toggle" data-toggle-gift>
+                  <i class="fas fa-gift"></i> Send as a Gift to a Friend
+                </button>
+                <form class="modal-gift-form" data-gift-form="${pkg.id}">
+                  <input type="text" name="username" class="hud-input" placeholder="Friend's Minecraft IGN" required style="height: 2.5rem; font-size: 0.85rem;" />
+                  <button type="submit" class="site-discord-btn" style="min-height: 2.5rem; font-size: 0.75rem;">Send Gift</button>
+                </form>
+              </div>`
+        }
+      </div>
+      <div class="hud-modal-footer">
+        <div class="modal-price-row">
+          <span style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase; color: var(--muted-foreground);">Price</span>
+          <span class="modal-price-val">${money(pkg.total_price ?? pkg.base_price, pkg.currency || state.store?.currency)}</span>
+        </div>
+        ${
+          inBasket
+            ? `<button type="button" class="btn-purchase is-in-cart" data-remove="${pkg.id}">
+                 <i class="fas fa-trash-alt"></i> Remove from Cart
+               </button>`
+            : `<button type="button" class="btn-purchase" data-add="${pkg.id}">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart" style="margin-right: 0.35rem;"><circle cx="8" cy="21" r="1"></circle><circle cx="19" cy="21" r="1"></circle><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path></svg> Add to Cart
+               </button>`
+        }
       </div>`;
-    els.modal.classList.add("modal--open");
-    bindCursorAura();
+    window.clearTimeout(closeModal.timer);
+    els.modalOverlay.setAttribute("aria-hidden", "false");
+    els.modalOverlay.classList.add("is-open");
+    initModalTouchEvents();
   }
 
   function closeModal() {
-    els.modal.classList.remove("modal--open");
-    els.modal.innerHTML = "";
+    els.modalOverlay.classList.remove("is-open");
+    els.modalOverlay.setAttribute("aria-hidden", "true");
+    state.modalGallery = null;
+    window.clearTimeout(closeModal.timer);
+    closeModal.timer = window.setTimeout(() => {
+      if (!els.modalOverlay.classList.contains("is-open")) {
+        els.modalContainer.innerHTML = "";
+      }
+    }, 260);
   }
 
-  function renderNav() {
-    const activeCategory = state.view === "category" ? Number(state.categoryId) : null;
-    const items = state.categories
-      .map((category) => {
-        const active = activeCategory === Number(category.id) ? "active" : "";
-        return `<li class="${active}"><a href="/store/?category=${category.id}" data-route="category" data-category="${category.id}">${escapeHtml(category.name)}</a></li>`;
+  function renderCategoryNav() {
+    const activeCat = state.view === "category" ? Number(state.categoryId) : null;
+    const catItems = state.categories
+      .map((cat) => {
+        const activeClass = activeCat === Number(cat.id) ? "active" : "";
+        return `<a href="/?category=${cat.id}" class="${activeClass}" data-route="category" data-category="${cat.id}">${escapeHtml(cat.name)}</a>`;
       })
       .join("");
-    els.navCategories.innerHTML = `
-      <button class="header__closeMobileNav iconBoxed iconBoxed--rounded btn--dark cursorAura cursorAura--dim" data-close-nav>
-        <i class="fas fa-chevron-right"></i>
-      </button>
-      <li class="${state.view === "home" || state.view === "complete" ? "active" : ""}"><a href="/store/" data-route="home">Home</a></li>
-      ${items}
-      <div>${renderCartButton()}</div>`;
+
+    els.categoryNav.innerHTML = `
+      <a href="/" class="${state.view === "home" || state.view === "complete" ? "active" : ""}" data-route="home">Home</a>
+      ${catItems}
+    `;
   }
 
-  function renderCartButton() {
-    if (state.basket?.username) {
-      const count = basketCount();
-      const total = money(
-        state.basket.total_price ?? state.basket.base_price,
-        state.basket.currency,
-      );
-      return `
-        <button class="header__cart header__cart--primary cursorAura" data-open-basket>
-          <div class="cart__info">
-            <h2><i class="fas fa-shopping-cart"></i>View Cart</h2>
-            <p>${count > 0 ? `${count} item${count === 1 ? "" : "s"} - ${total}` : "No items in cart!"}</p>
-          </div>
-          <div class="cart__player"><img src="https://mc-heads.net/body/${encodeURIComponent(state.basket.username)}/left" class="unselectable" alt="" /></div>
-        </button>`;
+  function renderHeaderCartSlot() {
+    const count = basketCount();
+    const username = state.basket?.username;
+
+    if (username) {
+      const cartLabel = `${escapeHtml(username)}'s Cart`;
+      els.headerCartSlot.innerHTML = `
+        <button type="button" class="header-cart-btn ${count > 0 ? "has-items" : ""}" data-open-cart aria-label="View Cart">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart"><circle cx="8" cy="21" r="1"></circle><circle cx="19" cy="21" r="1"></circle><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path></svg>
+          <span>${cartLabel}</span>
+          ${count > 0 ? `<span class="cart-badge">${count}</span>` : ""}
+        </button>
+      `;
+    } else {
+      els.headerCartSlot.innerHTML = `
+        <button type="button" class="site-button-outline" data-route="login">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+          <span>Login</span>
+        </button>
+      `;
     }
-    return `
-      <button class="header__cart cursorAura cursorAura--dim" data-route="login">
-        <div class="cart__info">
-          <h2><i class="fas fa-shopping-cart"></i>Login</h2>
-          <p>Start shopping!</p>
-        </div>
-      </button>`;
   }
 
-  function renderBasket() {
-    const currency = state.basket?.currency || state.store?.currency || "USD";
+  function renderCartDrawer() {
     const items = basketPackages();
-    const username = state.basket?.username || "";
-    els.basketUsername.textContent = username || "Guest";
-    els.basketSummary.textContent = items.length
-      ? `${basketCount()} item${basketCount() === 1 ? "" : "s"} for ${money(state.basket.total_price, currency)}`
-      : "No items in cart!";
-    els.basketTotal.textContent = money(state.basket?.total_price || 0, currency);
-    els.basketPlayer.src = username
-      ? `https://mc-heads.net/body/${encodeURIComponent(username)}/left`
-      : "";
-    els.basketItems.innerHTML = items
+    const username = state.basket?.username;
+    const currency = state.basket?.currency || state.store?.currency || "USD";
+
+    if (username) {
+      els.cartUsername.textContent = username;
+      els.cartUserAvatar.src = `https://mc-heads.net/avatar/${encodeURIComponent(username)}/64`;
+      els.cartUserAvatar.style.display = "block";
+      els.cartLogoutBtn.style.display = "inline-flex";
+    } else {
+      els.cartUsername.textContent = "Guest";
+      els.cartUserAvatar.style.display = "none";
+      els.cartLogoutBtn.style.display = "none";
+    }
+
+    els.cartTotalAmount.textContent = money(state.basket?.total_price || 0, currency);
+
+    if (!items.length) {
+      els.cartDrawerItems.innerHTML = `
+        <div class="cart-empty-state">
+          <i class="fas fa-shopping-basket"></i>
+          <p>Your cart is empty</p>
+          <span style="font-size: 0.75rem; color: var(--muted-foreground); margin-top: 0.5rem;">Select packages to get started</span>
+        </div>
+      `;
+      return;
+    }
+
+    els.cartDrawerItems.innerHTML = items
       .map((pkg) => {
         const qty = Number(pkg.in_basket?.quantity || pkg.quantity || 1);
         const price = pkg.in_basket?.price ?? pkg.total_price ?? pkg.base_price;
         return `
-          <div class="package">
-            <div class="package__info">
-              <h3>${escapeHtml(truncate(pkg.name, 25))}</h3>
-              <span class="tag tag--left tag--700">${escapeHtml(money(price, currency))}</span>
-            </div>
-            <div class="package__buttons">
-              <span>Quantity:</span>
-              <button class="iconBoxed iconBoxed--rounded package__infoModal cursorAura cursorAura--dim" data-info="${pkg.id}"><i class="fas fa-info"></i></button>
-              <button class="iconBoxed iconBoxed--rounded package__remove cursorAura" data-qty="${pkg.id}" data-next="${qty - 1}"><i class="fas fa-minus"></i></button>
-              <input type="text" class="package__quantity" value="${qty}" readonly maxlength="3" />
-              <button class="iconBoxed iconBoxed--rounded package__add cursorAura" data-qty="${pkg.id}" data-next="${qty + 1}"><i class="fas fa-plus"></i></button>
-            </div>
-          </div>`;
+        <div class="cart-item">
+          <div class="cart-item-info">
+            <div class="cart-item-title">${escapeHtml(pkg.name)}</div>
+            <div class="cart-item-price">${money(price, currency)}</div>
+          </div>
+          <div class="quantity-control" style="height: 2.25rem;">
+            <button type="button" class="quantity-btn" data-qty="${pkg.id}" data-next="${qty - 1}"><i class="fas fa-minus" style="font-size: 0.7rem;"></i></button>
+            <span class="quantity-display" style="padding: 0 0.5rem; font-size: 0.85rem;">${qty}</span>
+            <button type="button" class="quantity-btn" data-qty="${pkg.id}" data-next="${qty + 1}"><i class="fas fa-plus" style="font-size: 0.7rem;"></i></button>
+          </div>
+        </div>
+      `;
       })
       .join("");
   }
 
-  function renderPackageCard(pkg, displayType) {
+  function renderPackageCard(pkg, index) {
     const currency = pkg.currency || state.store?.currency || "USD";
-    const inBasket = packageInBasket(pkg.id);
+    const inBasket = Boolean(packageInBasket(pkg.id));
     const qty = packageQuantity(pkg.id);
-    const image = pkg.image
-      ? `<div class="package__image"><a href="#" data-info="${pkg.id}"><img src="${escapeHtml(pkg.image)}" alt="${escapeHtml(pkg.name)}" /></a></div>`
-      : `<div class="package__image"><a href="#" data-info="${pkg.id}" class="package__placeholder">${escapeHtml(pkg.name)}</a></div>`;
-    const buttons = inBasket
-      ? `<div class="package__buttons">
-           <button class="iconBoxed iconBoxed--rounded package__remove cursorAura" data-qty="${pkg.id}" data-next="${qty - 1}"><i class="fas fa-minus"></i></button>
-           <input type="text" class="package__quantity" value="${qty}" readonly maxlength="3" />
-           <button class="iconBoxed iconBoxed--rounded package__add cursorAura" data-qty="${pkg.id}" data-next="${qty + 1}"><i class="fas fa-plus"></i></button>
-         </div>`
-      : `<div class="package__buttons package__buttons--outBasket">
-           <button class="iconBoxed iconBoxed--rounded package__infoModal toggle-modal cursorAura cursorAura--dim" data-info="${pkg.id}"><i class="fas fa-info"></i></button>
-           <button class="btn btn--primary cursorAura" data-add="${pkg.id}">Add to Cart</button>
-         </div>`;
+    const indexStr = index < 9 ? `0${index + 1}` : String(index + 1);
 
-    if (displayType === "list") {
-      return `
-        <div class="package">
-          <div class="package__info">
-            <h3>${escapeHtml(truncate(pkg.name, 25))}</h3>
-            <div class="package__tags">
-              <span class="tag tag--left tag--700">${escapeHtml(money(pkg.total_price ?? pkg.base_price, currency))}</span>
-            </div>
-          </div>
-          ${buttons}
-        </div>`;
-    }
+    const imageHtml = pkg.image
+      ? `<img src="${escapeHtml(pkg.image)}" alt="${escapeHtml(pkg.name)}" loading="lazy" />`
+      : `<div class="package-placeholder-icon"><i class="fas fa-box-open"></i></div>`;
+
+    const buttonHtml = inBasket
+      ? `<div class="quantity-control">
+           <button type="button" class="quantity-btn" data-qty="${pkg.id}" data-next="${qty - 1}" title="Decrease quantity"><i class="fas fa-minus"></i></button>
+           <span class="quantity-display">${qty} in cart</span>
+           <button type="button" class="quantity-btn" data-qty="${pkg.id}" data-next="${qty + 1}" title="Increase quantity"><i class="fas fa-plus"></i></button>
+         </div>`
+      : `<button type="button" class="btn-purchase" data-add="${pkg.id}">
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart" style="margin-right: 0.35rem;"><circle cx="8" cy="21" r="1"></circle><circle cx="19" cy="21" r="1"></circle><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path></svg> Add to Cart
+         </button>`;
 
     return `
-      <div class="package">
-        ${image}
-        <div class="package__info">
-          <h2>${escapeHtml(truncate(pkg.name, 20))}</h2>
-          <h3>${escapeHtml(money(pkg.total_price ?? pkg.base_price, currency))}</h3>
+      <article class="package-card">
+        <div class="package-card-top">
+          <span class="package-index">${indexStr}</span>
         </div>
-        ${buttons}
-      </div>`;
+        <div class="package-image-wrap" data-info="${pkg.id}">
+          ${imageHtml}
+        </div>
+        <div class="package-card-body">
+          <h3 class="package-card-title" data-info="${pkg.id}">${escapeHtml(pkg.name)}</h3>
+          <div class="package-card-price">${money(pkg.total_price ?? pkg.base_price, currency)}</div>
+        </div>
+        <div class="package-card-actions">
+          ${buttonHtml}
+        </div>
+      </article>
+    `;
   }
 
-  function renderCategory(category) {
-    const displayType = category.display_type === "list" ? "list" : "images";
-    const packages = (category.packages || [])
+  function renderFeaturedPackage() {
+    const featPkg =
+      state.packagesById.get(CONFIG.featuredPackageId) ||
+      state.packagesById.get(7692691) ||
+      state.packagesById.get(6052238);
+    if (!featPkg) return "";
+
+    const inBasket = Boolean(packageInBasket(featPkg.id));
+    const currency = featPkg.currency || state.store?.currency || "USD";
+    const priceStr = money(featPkg.total_price ?? featPkg.base_price, currency);
+
+    const btnHtml = inBasket
+      ? `<button type="button" class="btn-purchase is-in-cart" data-open-cart style="min-width: 170px;">
+           <i class="fas fa-check"></i> In Cart
+         </button>`
+      : `<button type="button" class="btn-purchase" data-add="${featPkg.id}" style="min-width: 170px;">
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart" style="margin-right: 0.35rem;"><circle cx="8" cy="21" r="1"></circle><circle cx="19" cy="21" r="1"></circle><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path></svg> Add to Cart
+         </button>`;
+
+    const featImg =
+      featPkg.image ||
+      (featPkg.media && featPkg.media[0]?.url) ||
+      "https://dunb17ur4ymx4.cloudfront.net/packages/images/b4b967656817132c3ee7af10130a8a0b1a040327.png";
+    const isSlayer = Number(featPkg.id) === 7692691;
+    const badgeText = isSlayer
+      ? "FEATURED DEAL &bull; BLACK MARKET"
+      : "FEATURED DEAL &bull; BEST VALUE";
+    const descText = isSlayer
+      ? "Complete Black Market endgame armor and weapon equipment set. Includes all pictured Slayer items."
+      : featPkg.description
+        ? sanitizeContent(featPkg.description)
+            .replace(/<[^>]*>?/gm, "")
+            .trim()
+        : "Exclusive limited-edition package deal.";
+    const valueTag = isSlayer ? "+ FULL SET" : "+ MAXIMUM VALUE";
+
+    return `
+      <section class="featured-section">
+        <div class="featured-card" data-info="${featPkg.id}">
+          <div class="featured-badge"><span class="site-beacon"></span> ${badgeText}</div>
+          <div class="featured-inner">
+            <div class="featured-img-wrap" data-info="${featPkg.id}">
+              <img src="${featImg}" alt="${escapeHtml(featPkg.name)}" />
+            </div>
+            <div class="featured-details" data-info="${featPkg.id}">
+              <h2 data-info="${featPkg.id}">${escapeHtml(featPkg.name)}</h2>
+              <p data-info="${featPkg.id}">${descText}</p>
+              <div class="featured-price" data-info="${featPkg.id}">${priceStr} <span class="featured-discount text-accent">${valueTag}</span></div>
+            </div>
+            <div class="featured-action">
+              ${btnHtml}
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderCategorySection(category, excludePackageId = null) {
+    let packages = (category.packages || [])
       .slice()
       .sort((a, b) => (a.order || 0) - (b.order || 0));
-    const cards = packages.length
-      ? packages.map((pkg) => renderPackageCard(pkg, displayType)).join("")
-      : `<p>No packages to display in this category.</p>`;
+    if (excludePackageId) {
+      packages = packages.filter((pkg) => Number(pkg.id) !== Number(excludePackageId));
+    }
+    const cards = packages.map((pkg, idx) => renderPackageCard(pkg, idx)).join("");
+    const desc = sanitizeContent(category.description);
+
     return `
-      <div class="panel category-block">
-        <div class="panel__heading"><h1>${escapeHtml(category.name)}</h1></div>
-        <div class="panel__body">
-          ${category.description ? `<div class="panel__description markup__body">${category.description}</div>` : ""}
-          <div class="category category--${displayType}">${cards}</div>
+      <section class="category-section">
+        <div class="category-header">
+          <h2>${escapeHtml(category.name)}</h2>
+          ${desc ? `<p class="category-description">${desc}</p>` : ""}
         </div>
-      </div>`;
+        <div class="package-grid">
+          ${cards || "<p class='text-muted'>No packages available in this category.</p>"}
+        </div>
+      </section>
+    `;
   }
 
   function renderMain() {
     if (state.view === "login") {
       els.content.innerHTML = `
-        <div class="panel">
-          <div class="panel__heading"><h1>Login</h1></div>
-          <div class="panel__body">
-            <p style="padding-bottom:1rem">Enter the Minecraft username that should receive this purchase.</p>
-            <form class="username" data-login-form>
-              <input type="text" name="ign" class="input--900" placeholder="Enter your username" required autocomplete="username" />
-              <button class="btn btn--primary cursorAura" type="submit">Login</button>
-            </form>
-          </div>
-        </div>`;
+        <div class="login-panel">
+          <h2><i class="fas fa-user-astronaut text-primary"></i> Player Login</h2>
+          <p>Enter your exact Minecraft username so Tebex can deliver your purchases in-game.</p>
+          <form data-login-form>
+            <input type="text" name="ign" class="hud-input" placeholder="Minecraft Username (e.g. Notch)" required autofocus autocomplete="username" />
+            <div style="margin-top: 1.25rem;">
+              <button type="submit" class="btn-purchase">
+                <i class="fas fa-sign-in-alt"></i> Login & Continue
+              </button>
+            </div>
+          </form>
+        </div>
+      `;
       return;
     }
 
     if (state.view === "complete") {
       els.content.innerHTML = `
-        <div class="panel">
-          <div class="panel__heading"><h1>Thank you</h1></div>
-          <div class="panel__body markup__body">
-            <p>Your checkout is complete. Commands are delivered to the Minecraft username you used at login.</p>
-            <p><a href="/store/" data-route="home">Return to the store</a></p>
-          </div>
-        </div>`;
+        <div class="complete-panel">
+          <h2><i class="fas fa-check-circle text-primary"></i> Order Confirmed</h2>
+          <p>Thank you for supporting Arcturus Factions! Your order is being processed and will be delivered to your account in-game shortly.</p>
+          <a href="/" data-route="home" class="btn-purchase" style="max-width: 260px; margin: 0 auto; text-decoration: none;">
+            <i class="fas fa-store"></i> Return to Store
+          </a>
+        </div>
+      `;
       return;
     }
 
     if (state.view === "category") {
-      const category = state.categories.find(
-        (item) => Number(item.id) === Number(state.categoryId),
+      const cat = state.categories.find((c) => Number(c.id) === Number(state.categoryId));
+      if (!cat) {
+        els.content.innerHTML = `<div class="hud-panel"><div class="hud-panel-header"><h2>Category not found</h2></div></div>`;
+        return;
+      }
+      const hasFeatured = (cat.packages || []).some(
+        (p) => Number(p.id) === Number(CONFIG.featuredPackageId),
       );
-      els.content.innerHTML = category
-        ? renderCategory(category)
-        : `<div class="panel"><div class="panel__heading"><h1>Category not found</h1></div></div>`;
+      if (hasFeatured) {
+        els.content.innerHTML =
+          renderFeaturedPackage() + renderCategorySection(cat, CONFIG.featuredPackageId);
+      } else {
+        els.content.innerHTML = renderCategorySection(cat);
+      }
       return;
     }
 
-    const intro = state.store?.description || "<p>Welcome to the Arcturus store.</p>";
-    const sections = state.categories.map((category) => renderCategory(category)).join("");
+    // Home view: Featured package + all categories (excluding featured package from category grids to prevent duplicates)
+    const featuredHtml = renderFeaturedPackage();
+    const sections = state.categories
+      .map((c) => renderCategorySection(c, CONFIG.featuredPackageId))
+      .join("");
     els.content.innerHTML = `
-      <div class="panel">
-        <div class="panel__heading"><h1>${escapeHtml(state.store?.name || "Arcturus Factions")}</h1></div>
-        <div class="panel__body markup__body">${intro}</div>
-      </div>
-      ${sections}`;
-  }
-
-  function renderSidebar() {
-    els.sidebar.innerHTML = `
-      <aside class="module">
-        <div class="module__heading"><h2>Server</h2></div>
-        <div class="module__body store-status">
-          <p><strong>IP</strong><br>${escapeHtml(CONFIG.server)}</p>
-          <p>Supports 1.8+ Java and Bedrock. Cracked clients are welcome.</p>
-        </div>
-      </aside>
-      <aside class="module">
-        <div class="module__heading"><h2>Need help?</h2></div>
-        <div class="module__body store-status">
-          <p>Open a ticket on Discord if a package does not deliver.</p>
-          <p><a href="${CONFIG.discord}" target="_blank" rel="noopener">Join Discord</a></p>
-        </div>
-      </aside>`;
-  }
-
-  function renderHeaderMeta() {
-    const name = state.store?.name || "Arcturus Factions";
-    document.title = `${name} | Store`;
-    if (state.store?.logo) {
-      els.logoImg.src = state.store.logo;
-      els.logoBlur.src = state.store.logo;
-      els.popupLogo.src = state.store.logo;
-    }
+      ${featuredHtml}
+      ${sections}
+    `;
   }
 
   function render() {
-    renderHeaderMeta();
-    renderNav();
-    renderSidebar();
+    renderCategoryNav();
+    renderHeaderCartSlot();
+    renderCartDrawer();
     renderMain();
-    renderBasket();
-    bindCursorAura();
   }
 
-  async function handleLogin(username) {
-    setBusy(true);
-    try {
-      await createBasket(username.trim());
-      const pending = state.pendingPackageId;
-      state.pendingPackageId = null;
-      if (pending) {
-        await addPackage(pending);
-      } else {
-        showAlert(`Logged in as ${username.trim()}.`);
-        setRoute({ view: "home" }, true);
+  function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    } else {
+      const temp = document.createElement("textarea");
+      temp.value = text;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand("copy");
+      temp.remove();
+    }
+  }
+
+  async function onClick(event) {
+    // Nav route link
+    const routeLink = event.target.closest("[data-route]");
+    if (routeLink) {
+      event.preventDefault();
+      const routeType = routeLink.getAttribute("data-route");
+      if (routeType === "home") {
+        setRoute({ view: "home" });
+      } else if (routeType === "category") {
+        const catId = routeLink.getAttribute("data-category");
+        setRoute({ view: "category", categoryId: Number(catId) });
+      } else if (routeType === "login") {
+        setRoute({ view: "login" });
       }
-      if (pending) setRoute({ view: "home" }, true);
-    } catch (error) {
-      showAlert(error.message, "danger");
-    } finally {
-      setBusy(false);
+      return;
     }
-  }
 
-  function onClick(event) {
-    const closeModalBtn = event.target.closest("[data-close-modal]");
-    if (closeModalBtn) {
+    // Add to cart
+    const addBtn = event.target.closest("[data-add]");
+    if (addBtn) {
       event.preventDefault();
-      closeModal();
-      return;
-    }
-    if (event.target === els.modal) {
-      closeModal();
+      const pkgId = addBtn.getAttribute("data-add");
+      addPackage(pkgId).catch((err) => showAlert(err.message, "danger"));
       return;
     }
 
-    const collapse = event.target.closest("[data-collapse]");
-    if (collapse) {
+    // Remove from cart
+    const removeBtn = event.target.closest("[data-remove]");
+    if (removeBtn) {
       event.preventDefault();
-      const name = collapse.getAttribute("data-collapse");
-      const panel = document.querySelector(`[data-collapsible="${name}"]`);
-      if (panel) panel.classList.toggle("collapsible--open");
+      const pkgId = removeBtn.getAttribute("data-remove");
+      removePackage(pkgId).catch((err) => showAlert(err.message, "danger"));
       return;
     }
 
+    // Quantity update
+    const qtyBtn = event.target.closest("[data-qty]");
+    if (qtyBtn) {
+      event.preventDefault();
+      const pkgId = qtyBtn.getAttribute("data-qty");
+      const next = Number(qtyBtn.getAttribute("data-next") || 0);
+      updatePackageQuantity(pkgId, next).catch((err) => showAlert(err.message, "danger"));
+      return;
+    }
+
+    // Package info modal via data-info (image, title, or featured card)
     const info = event.target.closest("[data-info]");
-    if (info) {
+    if (
+      info &&
+      !event.target.closest("[data-add], [data-remove], [data-qty], .quantity-control, button, a")
+    ) {
       event.preventDefault();
       openPackageModal(info.getAttribute("data-info"));
       return;
     }
 
-    const add = event.target.closest("[data-add]");
-    if (add) {
+    // Open Cart drawer
+    if (event.target.closest("[data-open-cart]")) {
       event.preventDefault();
-      addPackage(add.getAttribute("data-add"));
+      openCartDrawer();
       return;
     }
 
-    const remove = event.target.closest("[data-remove]");
-    if (remove) {
+    // Close Cart drawer
+    if (event.target.closest("[data-close-drawer]")) {
       event.preventDefault();
-      removePackage(remove.getAttribute("data-remove"));
+      closeCartDrawer();
+      return;
+    }
+
+    // Close Modal
+    if (event.target.closest("[data-close-modal]") || event.target.id === "packageModal") {
+      event.preventDefault();
       closeModal();
       return;
     }
 
-    const qty = event.target.closest("[data-qty]");
-    if (qty) {
+    // Modal Gallery Navigation
+    if (event.target.closest("[data-gallery-prev]")) {
       event.preventDefault();
-      setQuantity(qty.getAttribute("data-qty"), Number(qty.getAttribute("data-next")));
+      if (state.modalGallery) setModalGalleryIndex(state.modalGallery.index - 1);
       return;
     }
 
-    const route = event.target.closest("[data-route]");
-    if (route) {
+    if (event.target.closest("[data-gallery-next]")) {
       event.preventDefault();
-      const view = route.getAttribute("data-route");
-      if (view === "home") setRoute({ view: "home" });
-      if (view === "login") setRoute({ view: "login" });
-      if (view === "category")
-        setRoute({ view: "category", categoryId: Number(route.getAttribute("data-category")) });
-      manageMenu("close", "nav");
+      if (state.modalGallery) setModalGalleryIndex(state.modalGallery.index + 1);
       return;
     }
 
-    if (event.target.closest("[data-open-basket]")) {
+    const jumpBtn = event.target.closest("[data-gallery-jump]");
+    if (jumpBtn) {
       event.preventDefault();
-      manageMenu("open", "basket");
+      const jumpIdx = Number(jumpBtn.getAttribute("data-gallery-jump"));
+      setModalGalleryIndex(jumpIdx);
       return;
     }
-    if (event.target.closest("[data-close-basket]")) {
+
+    // Toggle Gifting
+    if (event.target.closest("[data-toggle-gift]")) {
       event.preventDefault();
-      manageMenu("close", "basket");
+      const form = $(".modal-gift-form");
+      if (form) form.classList.toggle("is-open");
       return;
     }
-    if (event.target.closest("[data-close-nav]")) {
+
+    // Logout from session
+    if (event.target.closest("#cartLogoutBtn")) {
       event.preventDefault();
-      manageMenu("close", "nav");
+      storeBasketIdent(null);
+      state.basket = null;
+      closeCartDrawer();
+      showAlert("Logged out of store session");
+      render();
       return;
     }
-    if (event.target.closest("[data-open-nav]")) {
+
+    // Checkout
+    if (event.target.closest("#cartCheckoutBtn")) {
       event.preventDefault();
-      manageMenu("open", "nav");
+      const checkoutUrl = state.basket?.links?.checkout;
+      if (!checkoutUrl) {
+        showAlert("Basket is empty or checkout URL unavailable", "danger");
+        return;
+      }
+      window.location.href = checkoutUrl;
       return;
     }
-    if (event.target.closest("[data-checkout]")) {
+
+    // Copy IP (Hero or Sidebar)
+    const copyBtn = event.target.closest("#heroCopyBtn, #sidebarCopyBtn");
+    if (copyBtn) {
       event.preventDefault();
-      checkout();
-      return;
-    }
-    if (event.target.closest("[data-logout]")) {
-      event.preventDefault();
-      logout();
+      copyText(CONFIG.server);
+      copyBtn.classList.add("is-copied");
+      const sub = copyBtn.querySelector(".copy-sub, #copyBtnSub");
+      if (sub) {
+        sub.textContent = "Copied to clipboard!";
+      }
+      window.clearTimeout(copyBtn.timer);
+      copyBtn.timer = window.setTimeout(() => {
+        copyBtn.classList.remove("is-copied");
+        if (sub) sub.textContent = "Click to copy IP";
+      }, 2200);
+      showAlert("Server IP copied to clipboard: " + CONFIG.server);
       return;
     }
   }
 
-  function onSubmit(event) {
-    const login = event.target.closest("[data-login-form]");
-    if (login) {
+  async function onSubmit(event) {
+    // Login form submit
+    const loginForm = event.target.closest("[data-login-form]");
+    if (loginForm) {
       event.preventDefault();
-      const username = new FormData(login).get("ign");
-      if (username) handleLogin(String(username));
-      return;
-    }
-    const gift = event.target.closest("[data-gift-form]");
-    if (gift) {
-      event.preventDefault();
-      const username = new FormData(gift).get("username");
-      const packageId = gift.getAttribute("data-gift-form");
-      if (username) {
-        closeModal();
-        addPackage(packageId, { gift_username: String(username) });
-      }
-    }
-  }
+      const input = loginForm.querySelector("input[name='ign']");
+      const ign = (input?.value || "").trim();
+      if (!ign) return;
 
-  async function loadCounts() {
-    try {
-      const ping = await fetch(`https://api.minetools.eu/ping/${CONFIG.server}/25565`).then((res) =>
-        res.json(),
-      );
-      if (Number.isFinite(ping?.players?.online)) {
-        els.serverCount.textContent = String(ping.players.online);
-      }
-    } catch {
-      /* player count is optional */
-    }
-    try {
-      const discord = await fetch(
-        `https://discord.com/api/guilds/${CONFIG.discordId}/widget.json`,
-      ).then((res) => res.json());
-      if (Number.isFinite(discord?.presence_count)) {
-        els.discordCount.textContent = String(discord.presence_count);
-      }
-    } catch {
+      setBusy(true);
       try {
-        const invite = await fetch(
-          `https://discord.com/api/v9/invites/DTR6serkeM?with_counts=1`,
-        ).then((res) => res.json());
-        if (Number.isFinite(invite?.approximate_presence_count)) {
-          els.discordCount.textContent = String(invite.approximate_presence_count);
+        await ensureBasketWithAuth(ign);
+        showAlert(`Logged in as "${ign}"`);
+        if (state.pendingPackageId) {
+          const pkgId = state.pendingPackageId;
+          state.pendingPackageId = null;
+          setRoute({ view: "home" });
+          await addPackage(pkgId);
+        } else {
+          setRoute({ view: "home" });
         }
-      } catch {
-        /* discord count is optional */
+      } catch (err) {
+        showAlert(`Login error: ${err.message}`, "danger");
+      } finally {
+        setBusy(false);
       }
+      return;
+    }
+
+    // Gift form submit
+    const giftForm = event.target.closest("[data-gift-form]");
+    if (giftForm) {
+      event.preventDefault();
+      const pkgId = giftForm.getAttribute("data-gift-form");
+      const input = giftForm.querySelector("input[name='username']");
+      const friend = (input?.value || "").trim();
+      if (!friend) return;
+      giftPackage(pkgId, friend).catch((err) => showAlert(err.message, "danger"));
+      return;
     }
   }
 
   async function start() {
-    els.alert = $("#store-alert");
-    els.navCategories = $("#nav");
-    els.sidebar = $("#sidebar");
+    els.alert = $("#storeAlert");
+    els.alertText = $("#storeAlertText");
+    els.categoryNav = $("#headerCategoryNav");
+    els.headerCartSlot = $("#header-cart-slot");
     els.content = $("#content");
-    els.modal = $("#popup-modal");
-    els.popup = $(".popup");
-    els.popupBack = $(".popupBack");
-    els.popupLogo = $(".popup__logoBackground");
-    els.logoImg = $("#store-logo");
-    els.logoBlur = $("#store-logo-blur");
-    els.basketItems = $("#basket-items");
-    els.basketSummary = $("#basket-summary");
-    els.basketTotal = $("#basket-total");
-    els.basketUsername = $("#basket-username");
-    els.basketPlayer = $("#basket-player");
-    els.serverCount = $("#serverCount");
-    els.discordCount = $("#discordCount");
+    els.cartDrawer = $("#cartDrawer");
+    els.cartDrawerOverlay = $("#cartDrawerOverlay");
+    els.cartDrawerItems = $("#cartDrawerItems");
+    els.cartUsername = $("#cartUsername");
+    els.cartUserAvatar = $("#cartUserAvatar");
+    els.cartLogoutBtn = $("#cartLogoutBtn");
+    els.cartTotalAmount = $("#cartTotalAmount");
+    els.modalOverlay = $("#packageModal");
+    els.modalContainer = $("#packageModalContainer");
 
-    document.getElementById("copyrightYear").textContent = String(new Date().getFullYear());
-    document.getElementById("serverLink").addEventListener("click", () => {
-      copyText(CONFIG.server);
-      popupDisplay(true);
-    });
-    document.getElementById("closePopup").addEventListener("click", () => popupDisplay(false));
+    const year = $("#copyrightYear");
+    if (year) year.textContent = String(new Date().getFullYear());
+
     document.addEventListener("click", onClick);
     document.addEventListener("submit", onSubmit);
+
+    window.addEventListener("keydown", (e) => {
+      if (!els.modalOverlay || !els.modalOverlay.classList.contains("is-open")) return;
+      if (e.key === "Escape") {
+        closeModal();
+      } else if (e.key === "ArrowLeft") {
+        if (state.modalGallery && state.modalGallery.images.length > 1) {
+          e.preventDefault();
+          setModalGalleryIndex(state.modalGallery.index - 1);
+        }
+      } else if (e.key === "ArrowRight") {
+        if (state.modalGallery && state.modalGallery.images.length > 1) {
+          e.preventDefault();
+          setModalGalleryIndex(state.modalGallery.index + 1);
+        }
+      }
+    });
+
     window.addEventListener("popstate", () => {
       const route = parseRoute();
       state.view = route.view;
@@ -846,19 +1142,26 @@
     state.categoryId = route.categoryId || null;
 
     try {
-      await Promise.all([loadCatalog(), loadBasket(), loadCounts()]);
+      await Promise.all([loadCatalog(), loadBasket()]);
       if (state.view === "complete") {
         localStorage.removeItem(CONFIG.storageKey);
         state.basket = null;
       }
       render();
     } catch (error) {
-      els.content.innerHTML = `<div class="panel"><div class="panel__heading"><h1>Store unavailable</h1></div><div class="panel__body">${escapeHtml(error.message)}</div></div>`;
+      els.content.innerHTML = `
+        <div class="hud-panel">
+          <div class="hud-panel-header">
+            <h2><i class="fas fa-exclamation-triangle text-accent"></i> Store Unavailable</h2>
+          </div>
+          <div class="hud-panel-body">
+            <p>${escapeHtml(error.message)}</p>
+          </div>
+        </div>
+      `;
       showAlert(error.message, "danger");
     }
   }
 
-  window.manageMenu = manageMenu;
-  window.toggleDropdown = toggleDropdown;
   document.addEventListener("DOMContentLoaded", start);
 })();
