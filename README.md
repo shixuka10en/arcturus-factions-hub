@@ -1,86 +1,55 @@
-# Arcturus Ascendant
+# Arcturus Reborn — Website Source
 
-i want you build me aesthetic Minecraft server website
-minecraft server name
-Arcturus Reborn
-make a better theme web for it im providing you the arcturus logo to and server ip and many more details
-server ip: play.arcturusmc.org - arcturusmc.org
+Authoring repository for the official [Arcturus Reborn](https://www.arcturusmc.org) Minecraft Factions website.
 
-Introducing Arcturus
+## Architecture & Project Structure
 
-Arcturus is a Java Cracked Minecraft Factions Server supporting all versions from 1.8 to 1.20. We feature 1.8 style pvp and the best Custom Enchants, because we are based on Herobrine Factions. We have No Staff or Map Resets like other servers. Learn more at Minecraft Server Information.
+- **Single Source of Truth**: This repository (`arcturus-factions-hub`) contains the real authored React components, CSS, and site configuration.
+- **Deployment Repository**: Pre-rendered static output is deployed to [`lusterni`](https://github.com/Lusterni/lusterni) (which GitHub Pages serves at `www.arcturusmc.org`).
+- **Hydration Parity**: Static export pre-renders the exact HTML and matching client bundles to prevent hydration mismatches, DOM flicker, or black screens.
 
-Take the red pill or the blue pill?
+### Key Files & Folders
 
-The difference between Arcturus and its competitors.
+- `src/config/site.ts` — **Edit site text here**: Server address, Minecraft versions, Discord URL, feature descriptions, and SEO metadata.
+- `src/components/site/` — Human-readable, modular React components:
+  - `home-page.tsx` — Full homepage sections (Hero, About, Features, World Gallery, Server Comparison).
+  - `vote-page.tsx` — Dedicated voting guide with links to 7 server lists.
+  - `site-header.tsx` — Sticky header with dead-center desktop navigation and mobile drawer.
+  - `site-footer.tsx` — Clean footer with server IP and Discord link.
+  - `copy-server-address.tsx` — Resilient clipboard copy component with visual feedback.
+  - `site-structured-data.tsx` — Schema.org JSON-LD structured data for Google Search.
+- `src/styles.css` — Modern design system using Tailwind v4, custom theme variables, and responsive layout.
+- `public/` — Static assets (WebP images, multi-resolution favicons, `robots.txt`, `sitemap.xml`).
+- `scripts/`
+  - `static-export.mjs` — Pre-renders `/` and `/vote` into static HTML files in `.output/public`.
+  - `deploy-to-lusterni.mjs` — Cleans and synchronizes production build files directly to the `lusterni` deployment directory.
 
-Herobrine
+## Development Workflow
 
-0.19 TPS
+### 1. Local Development
 
-/20 TPS
-
-Great for enjoyers of Laggy & Unsupported servers!
-
-✓ Zero Staff
-
-✓ Outdated Plugins
-
-✓ Transgender Staff
-
-✓ Yearly Updates
-
-✓ Extremely P2W
-
-✓ Forced Email Authentication
-
-✓ Nonexistent Support Server
-
-stay a loser
-
-Arcturus
-
-21 TPS
-
-/20 TPS
-
-Great for enjoyers of Anti-Staff Minecraft Factions!
-
-✓ Zero Lag
-
-✓ Advanced plugins
-
-✓ No Staff (Freedom)
-
-✓ Regular Updates
-
-✓ Free Marketplace
-
-✓ VPNs Allowed
-
-✓ Discord Support Server & Direct Contact
-
-be a winner
-
-This project was built with [Lovable](https://lovable.dev).
-
-**Live app**: https://arcturus-factions-hub.lovable.app
-
-## Build with Lovable
-
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/8c633aa5-f685-43ff-a227-1520988615cb).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
-
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+```bash
 npm run dev
 ```
+
+Starts the Vite development server with hot module replacement.
+
+### 2. Making Content Changes
+
+To change site copy, server information, or SEO tags, edit `src/config/site.ts`.
+
+### 3. Build & Export
+
+```bash
+npm run build
+```
+
+Compiles client and SSR bundles, then executes static pre-rendering into `.output/public`.
+
+### 4. Deploy to Lusterni
+
+```bash
+npm run deploy
+```
+
+Builds the latest static export and automatically synchronizes all production files to `lusterni`, while purging all stale hashed assets.
